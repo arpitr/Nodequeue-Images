@@ -1,0 +1,485 @@
+<?php
+
+/**
+ * @file
+ * Custom Runsheets Functionality
+ *
+ */
+
+/**
+ * Implements hook_form_alter.
+ * To alter nodequeue add/edit form adds list of available content types and list all image feilds available to that content type.
+ * Adds image cache option to each field.
+ */
+function nodequeue_images_form_alter(&$form, &$form_state, $form_id) {
+
+  if (strpos($form_id, 'nodequeue_arrange_subqueue_form_') !== FALSE) {
+    unset($form['actions']['reverse']);
+    unset($form['actions']['shuffle']);
+    unset($form['actions']['clear']);
+    $form['nodes']['#theme'] = 'nodequeue_images_queue_listing_display';
+    $form['#attached']['js'] = array(
+      drupal_get_path('module', 'nodequeue_images') . '/nodequeue_images.js' => array('type' => 'file'),
+    );
+  }
+
+  if ($form_id == 'nodequeue_admin_delete') {
+    $queue_name = $form["name"]['#value'];
+    $nodequeues_deleted = nodequeue_load_queues(array($queue_name));
+    if (is_array($nodequeues_deleted)) {
+      foreach ($nodequeues_deleted as $nodequeue_deleted) {
+        if (is_array($nodequeue_deleted->types) && count($nodequeue_deleted->types) > 0) {
+          foreach ($nodequeue_deleted->types as $nodequeue_type) {
+            $image_config_variable = $nodequeue_deleted->name . '_' . $nodequeue_type . '_image_config';
+            $image_field_variable = $nodequeue_deleted->name . '_' . $nodequeue_type . '_image';
+            $image_style_variable = $nodequeue_deleted->name . '_' . $nodequeue_type . '_image_style';
+            variable_del($image_field_variable);
+            variable_del($image_style_variable);
+            variable_del($image_config_variable);
+          }
+        }
+      }
+    }
+  }
+
+  // Get all content type list with list of images.
+  if ($form_id == 'nodequeue_edit_queue_form') {
+    $form['submit']['#weight'] = 2;
+    $form['delete']['#weight'] = 2;
+    $form['types']['#access'] = FALSE;
+    $form['#submit'] = array('nodequeue_images_nodequeue_submit');
+    $get_all_content_type_info = nodequeue_images_content_type_with_images();
+    $form['types_custom'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Content Type'),
+      '#weight' => 1,
+    );
+
+    $get_selected_values = $form['types']['#default_value'];
+    foreach ($get_all_content_type_info as $key => $value) {
+      $form['types_custom'][$key] = array(
+        '#type' => 'checkbox',
+        '#default_value' => in_array($key, $get_selected_values) ? 1 : 0,
+        '#title' => $value['content_type_info'][$key],
+      );
+
+      if (isset($value['field_info'])) {
+
+        $image_config = $key . "_image_config";
+        $image_config_fieldset = $key . "_image_config_fieldset";
+        $image_config_variable = "";
+        if (isset($form['name']['#value'])) {
+          $image_config_variable = $form['name']['#value'] . '_' . $key . '_image_config';
+        }
+        $image_config_value = variable_get($image_config_variable);
+        $form['types_custom'][$image_config_fieldset]['fieldset'] = array(
+          '#type' => 'fieldset',
+          '#title' => t(''),
+          '#collapsible' => FALSE,
+          '#collapsed' => FALSE,
+          '#states' => array(
+            'visible' => array(
+              ':input[name="' . $key . '"]' => array('checked' => TRUE),
+            ),
+          ),
+        );
+        $form['types_custom'][$image_config_fieldset]['fieldset'][$image_config] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Show Thumbnail while Searching'),
+          '#default_value' => ($image_config_value != "") ? 1 : 0,
+          '#states' => array(
+            'visible' => array(
+              ':input[name="' . $key . '"]' => array('checked' => TRUE),
+            ),
+          ),
+          '#weight' => '1'
+        );
+        $image_style_fieldset = $key . '_image_style_fieldset';
+
+        $form['types_custom'][$image_config_fieldset]['fieldset'][$image_style_fieldset] = array(
+          '#type' => 'fieldset',
+          '#title' => t('Choose Image Style'),
+          '#collapsible' => TRUE,
+          '#collapsed' => TRUE,
+          '#states' => array(
+            'visible' => array(
+              ':input[name="' . $image_config . '"]' => array('checked' => TRUE),
+            ),
+          ),
+          '#weight' => '2'
+        );
+
+        $image_style = $key . '_image_style';
+        $get_all_styles = image_styles();
+
+        if (is_array($get_all_styles) && count($get_all_styles) > 0) {
+          foreach ($get_all_styles as $get_all_style) {
+            $image_style_options[$get_all_style['name']] = $get_all_style['label'];
+          }
+          $image_style_variable = "";
+          if (isset($form['name']['#value'])) {
+            $image_style_variable = $form['name']['#value'] . '_' . $key . '_image_style';
+          }
+          $image_style_selected = variable_get($image_style_variable);
+          $form['types_custom'][$image_config_fieldset]['fieldset'][$image_style_fieldset][$image_style] = array(
+            '#type' => 'select',
+            '#options' => $image_style_options,
+            '#default_value' => ($image_style_selected != "") ? $image_style_selected : 'node_queue_thumbnail',
+          );
+        }
+
+        $field_key = $key . '_field_info';
+
+        $form['types_custom'][$image_config_fieldset]['fieldset'][$field_key] = array(
+          '#type' => 'container',
+          '#title' => t($field_key),
+          '#collapsible' => TRUE,
+          '#collapsed' => TRUE,
+          '#weight' => '5',
+          '#states' => array(
+            'visible' => array(
+              ':input[name="' . $image_config . '"]' => array('checked' => TRUE),
+            ),
+          ),
+        );
+        $image_field_variable = "";
+        if (isset($form['name']['#value'])) {
+          $image_field_variable = $form['name']['#value'] . '_' . $key . '_image';
+        }
+        $get_first_option = array_keys($value['field_info']);
+        $image_field_selected = variable_get($image_field_variable);
+        $form['types_custom'][$image_config_fieldset]['fieldset'][$field_key][$field_key] = array(
+          '#type' => 'radios',
+          '#options' => $value['field_info'],
+          '#default_value' => ($image_field_selected != "") ? $image_field_selected : $get_first_option[0],
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_menu_alter.
+ * To override autocompletete node suggestions with custom function with selected image option.
+ */
+function nodequeue_images_menu_alter(&$items) {
+  $items['nodequeue/autocomplete']['page callback'] = 'nodequeue_images_nodequeue_autocomplete';
+}
+
+/**
+ * Helper function to return list of content types with list of images field.
+ * @return
+ *  array $content_type_details array of list of content types and image fields inline to content type.
+ */
+function nodequeue_images_content_type_with_images() {
+  $content_types = node_type_get_types();
+  $content_type_details = array();
+  foreach ($content_types as $content_type) {
+    $content_type_details[$content_type->type]['content_type_info'][$content_type->type] = $content_type->name;
+    $image_field_instances = field_info_instances('node', $content_type->type);
+    foreach ($image_field_instances as $image_field_instance) {
+      if ($image_field_instance['widget']['module'] == 'media') {
+        if (in_array("image", $image_field_instance['widget']['settings']['allowed_types'])) {
+          if (isset($image_field_instance['widget']['settings']['allowed_types']['video']) && $image_field_instance['widget']['settings']['allowed_types']['image'] == 'video') {
+            continue;
+          }
+          else {
+            $content_type_details[$content_type->type]['field_info'][$image_field_instance['field_name']] = $image_field_instance['label'];
+          }
+        }
+      }
+      if ($image_field_instance['widget']['module'] == 'image') {
+        $content_type_details[$content_type->type]['field_info'][$image_field_instance['field_name']] = $image_field_instance['label'];
+      }
+    }
+  }
+  return $content_type_details;
+}
+
+/**
+ * Submit function for the nodequeue_queue form.
+ */
+function nodequeue_images_nodequeue_submit($formid, &$form_state) {
+  $queue = (object) $form_state['values'];
+  $get_all_content_types = node_type_get_types();
+  $content_types = array_keys($get_all_content_types);
+  foreach ($content_types as $content_type) {
+    if (array_key_exists($content_type, $form_state['values'])) {
+      if ($form_state['values'][$content_type]) {
+        $types[] = $content_type;
+        $get_image_field_config = $content_type . '_image_config';
+        if (isset($form_state['values'][$get_image_field_config])) {
+          $get_image_field_style = $content_type . '_image_style';
+          $get_image_field_info = $content_type . '_field_info';
+          $image_config_variable = $queue->name . '_' . $content_type . '_image_config';
+          $image_field_variable = $queue->name . '_' . $content_type . '_image';
+          $image_style_variable = $queue->name . '_' . $content_type . '_image_style';
+          if ($form_state['values'][$get_image_field_config] == 1) {
+            variable_set($image_field_variable, $form_state['values'][$get_image_field_info]);
+            variable_set($image_style_variable, $form_state['values'][$get_image_field_style]);
+            variable_set($image_config_variable, $form_state['values'][$get_image_field_config]);
+          } if ($form_state['values'][$get_image_field_config] == 0) {
+            variable_del($image_field_variable);
+            variable_del($image_style_variable);
+            variable_del($image_config_variable);
+          }
+        }
+      }
+    }
+  }
+  $queue->types = $types;
+  // Fix checkboxes.
+  $queue->roles = array_keys(array_filter($queue->roles));
+  // Remove roles that have the 'manipulate all queues' permission.
+  $manipulate_all_queues = array_keys(user_roles(FALSE, 'manipulate all queues'));
+  $queue->roles = array_diff($queue->roles, $manipulate_all_queues);
+
+  // Modify show_in_links based on whether or not links are available.
+  $queue->show_in_links = !empty($queue->link) || !empty($queue->link_remove);
+
+  nodequeue_api_queue_form_submit($queue, $form_state);
+
+  nodequeue_save($queue);
+
+  nodequeue_api_queue_form_submit_finish($queue, $form_state);
+
+  nodequeue_check_subqueue_sizes($queue);
+
+  if (!empty($queue->new)) {
+    drupal_set_message(t('The queue has been created.'));
+  }
+  else {
+    drupal_set_message(t('The queue has been updated.'));
+  }
+  $form_state['redirect'] = 'admin/structure/nodequeue';
+}
+
+/**
+ * Overriding nodequeue module autocomplete functionality to add image of selected field in selected image cache style.
+ * Fetch a list of nodes available to a given subqueue
+ * for autocomplete.
+ *
+ * @param $queue
+ *   The queue that owns the subqueue
+ * @param $subqueue
+ *   The subqueue
+ * @param $string
+ *   The string being matched.
+ *
+ * @return
+ *   An keyed array $nid => $title
+ */
+function nodequeue_images_nodequeue_api_autocomplete($queue, $subqueue, $string) {
+  $matches = array();
+  if (empty($string)) {
+    return $matches;
+  }
+
+  $query = db_select('node', 'n')
+      ->addTag('node_access')
+      ->fields('n', array('nid', 'tnid', 'title', 'type'))
+      ->range(0, variable_get('nodequeue_autocomplete_limit', 10));
+
+  if (!empty($queue->types)) {
+    $query->condition('n.type', $queue->types, 'IN');
+  }
+
+  $where_args = array();
+  global $user;
+  if (!user_access('administer nodes', $user)) {
+    $query->condition(db_or()->condition('n.status', 1)->condition('n.uid', $user->uid));
+  }
+
+  // Run a match to see if they're specifying by nid.
+  $preg_matches = array();
+  $match = preg_match('/\[nid: (\d+)\]/', $string, $preg_matches);
+  if (!$match) {
+    $match = preg_match('/^nid: (\d+)/', $string, $preg_matches);
+  }
+
+  if ($match) {
+    // If it found a nid via specification, reduce our resultset to just that nid.
+    $query->condition('n.nid', $preg_matches[1]);
+  }
+  else {
+    // Build the constant parts of the query.
+    $query->where('LOWER(n.title) LIKE LOWER(:string)', array(':string' => '%' . db_like($string) . '%'));
+  }
+
+  // Call to the API.
+  $function = $queue->owner . "_nodequeue_autocomplete";
+  if (function_exists($function)) {
+    return $function($queue, $subqueue, $string, $where, $where_args);
+  }
+  else {
+    $query->addTag('i18n_select');
+    $result = $query->execute();
+    foreach ($result as $node) {
+      $image_field_variable = $queue->name . '_' . $node->type . '_image';
+      $image_style_variable = $queue->name . '_' . $node->type . '_image_style';
+      $id = nodequeue_get_content_id($queue, $node);
+      $get_image_field = variable_get($image_field_variable);
+      if (isset($get_image_field) && $get_image_field != "") {
+        $get_node_object = node_load($node->nid);
+        if (isset($get_node_object->{$get_image_field}[LANGUAGE_NONE][0]['uri'])) {
+          $image_field_uri = $get_node_object->{$get_image_field}[LANGUAGE_NONE][0]['uri'];
+          $get_image_field_style = variable_get($image_style_variable);
+          $matches[$node->nid] = theme('image_style', array('style_name' => $get_image_field_style, 'path' => $image_field_uri, 'attributes' => array('class' => array('nodequeue-runsheets-images'))))
+              . check_plain($node->title)
+              . " [nid: $id]";
+        }
+        else {
+          $matches[$node->nid] = check_plain($node->title) . " [nid: $id]";
+        }
+      }
+      else {
+        $matches[$node->nid] = check_plain($node->title) . " [nid: $id]";
+      }
+    }
+  }
+  return $matches;
+}
+
+/**
+ * Overriding nodequeue module autocomplete page callback.
+ * Fetch a list of nodes available to a given subqueue
+ * for autocomplete.
+ */
+function nodequeue_images_nodequeue_autocomplete() {
+  $args = func_get_args();
+  $sqid = array_shift($args);
+  $string = implode('/', $args);
+  $matches = _nodequeue_images_nodequeue_autocomplete($sqid, $string);
+  drupal_json_output(drupal_map_assoc($matches));
+}
+
+/**
+ * Helper function for nodequeue autocomplete suggestions
+ */
+function _nodequeue_images_nodequeue_autocomplete($sqid, $string) {
+  $output = array();
+
+  if (!is_numeric($sqid) || !$string) {
+    return $output;
+  }
+
+  $subqueue = nodequeue_load_subqueue($sqid);
+  if (!$subqueue) {
+    return $output;
+  }
+
+  $queue = nodequeue_load($subqueue->name);
+  if (!$queue) {
+    return $output;
+  }
+
+  $nodes = nodequeue_images_nodequeue_api_autocomplete($queue, $subqueue, $string);
+  return $nodes;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function nodequeue_images_theme() {
+  return array(
+    'nodequeue_images_queue_listing_display' => array(
+      'render element' => 'form',
+    ),
+  );
+}
+
+/**
+ * Custom theme function definition
+ * To override nodequeues theme function to display queues in tabular format.
+ * Showing images is one of the reason we are overriding.
+ * @param type $variables
+ * @return type
+ */
+function theme_nodequeue_images_queue_listing_display($variables) {
+  $form = $variables['form'];
+
+  $output = '';
+
+  // Get css to hide some of the help text if javascript is disabled.
+  drupal_add_css(drupal_get_path('module', 'nodequeue') . '/nodequeue.css');
+
+  $table_id = 'nodequeue-dragdrop-' . $form['#subqueue']['sqid'];
+  $table_classes = array(
+    'nodequeue-dragdrop',
+    'nodequeue-dragdrop-name-' . $form['#subqueue']['name'],
+    'nodequeue-dragdrop-sqid-' . $form['#subqueue']['sqid'],
+    'nodequeue-dragdrop-reference-' . $form['#subqueue']['reference'],
+  );
+  drupal_add_tabledrag($table_id, 'order', 'sibling', 'node-position');
+  drupal_add_js(drupal_get_path('module', 'nodequeue') . '/nodequeue_dragdrop.js');
+
+  $reverse[str_replace('-', '_', $table_id)] = (bool) $form['#queue']['reverse'];
+  drupal_add_js(
+      array(
+    'nodequeue' => array(
+      'reverse' => $reverse,
+    )
+      ), array(
+    'type' => 'setting',
+    'scope' => JS_DEFAULT,
+      )
+  );
+
+  // Render form as table rows.
+  $rows = array();
+  $counter = 1;
+  foreach (element_children($form) as $key) {
+    if (isset($form[$key]['title'])) {
+      $row = array();
+      $image = '';
+      $image_field_variable = '';
+      if (isset($form['#queue']['name'])) {
+        if (isset($form[$key]['#node']['type'])) {
+          $queue_name = $form['#queue']['name'];
+          $content_type = $form[$key]['#node']['type'];
+          $image_field_variable = $queue_name . '_' . $content_type . '_image';
+          $image_style_variable = $queue_name . '_' . $content_type . '_image_style';
+          $get_image_field = variable_get($image_field_variable);
+          if (isset($get_image_field) && $get_image_field != "") {
+            $get_node_object = $form[$key]['#node'];
+            if (isset($get_node_object[$get_image_field][LANGUAGE_NONE][0]['uri'])) {
+              $image_field_uri = $get_node_object[$get_image_field][LANGUAGE_NONE][0]['uri'];
+              $get_image_field_style = variable_get($image_style_variable);
+              $image = theme('image_style', array('style_name' => $get_image_field_style, 'path' => $image_field_uri, 'attributes' => array('class' => array('nodequeue-display-runsheets-images'))));
+            }
+          }
+        }
+      }
+      $row[] = $image;
+      $row[] = drupal_render($form[$key]['title']);
+      $row[] = drupal_render($form[$key]['author']);
+      $row[] = drupal_render($form[$key]['date']);
+      $row[] = drupal_render($form[$key]['position']);
+      $row[] = (!empty($form[$key]['edit'])) ? drupal_render($form[$key]['edit']) : '&nbsp;';
+      $row[] = drupal_render($form[$key]['remove']);
+      $row[] = array(
+        'data' => $counter,
+        'class' => array('position')
+      );
+
+      $rows[] = array(
+        'data' => $row,
+        'class' => array('draggable'),
+      );
+    }
+
+    $counter++;
+  }
+
+  // Render the main nodequeue table.
+  $header = array(t('Image'), t('Title'), t('Author'), t('Post Date'), t('Position'), array('data' => t('Operations'), 'colspan' => 2), t('Position'));
+  $colspan = count($header) + 1;
+
+  if (empty($rows)) {
+    $rows[] = array(array('data' => t('No nodes in this queue.'), 'colspan' => $colspan));
+  }
+
+  $output .= theme('table', array('header' => $header, 'rows' => $rows, 'attributes' => array('id' => $table_id, 'class' => $table_classes)));
+
+  return $output;
+}

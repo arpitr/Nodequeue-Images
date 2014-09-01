@@ -1,0 +1,5 @@
+name = Nodequeue Images
+description = Show images with nodequeues.
+core = 7.x
+dependencies[] = nodequeue
+package = Drupal Contribution
